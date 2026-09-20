@@ -83,7 +83,7 @@ client = Groq(
 # =====================================
 
 
-MODEL_NAME = "llama-3.1-8b-instant"
+MODEL_NAME = "openai/gpt-oss-120b"
 
 
 
