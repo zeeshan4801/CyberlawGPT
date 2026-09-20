@@ -8,9 +8,9 @@ from sentence_transformers import SentenceTransformer
 from groq import Groq
 
 
-# =========================================
-# PAGE SETTINGS
-# =========================================
+# =====================================
+# PAGE CONFIG
+# =====================================
 
 st.set_page_config(
     page_title="CyberlawGPT",
@@ -21,30 +21,35 @@ st.set_page_config(
 
 st.title("⚖️ CyberlawGPT")
 
-st.write(
+st.caption(
     "AI Legal Assistant based on Pakistan Cyber Laws (PECA)"
 )
 
 
-# =========================================
-# GROQ API KEY FROM SECRETS
-# =========================================
+
+# =====================================
+# GROQ API KEY FROM STREAMLIT SECRETS
+# =====================================
 
 
-def get_api_key():
+def get_groq_key():
 
     try:
         return st.secrets["GROQ_API_KEY"]
 
     except Exception:
-        return os.getenv("GROQ_API_KEY")
+
+        return os.getenv(
+            "GROQ_API_KEY"
+        )
 
 
 
-api_key = get_api_key()
+GROQ_API_KEY = get_groq_key()
 
 
-if not api_key:
+
+if not GROQ_API_KEY:
 
     st.error(
         """
@@ -56,7 +61,7 @@ if not api_key:
 
         Example:
 
-        GROQ_API_KEY="your_api_key"
+        GROQ_API_KEY="your_key_here"
         """
     )
 
@@ -65,21 +70,19 @@ if not api_key:
 
 
 client = Groq(
-    api_key=api_key
+    api_key=GROQ_API_KEY
 )
 
 
 
+# =====================================
+# SIDEBAR SETTINGS
+# =====================================
 
-# =========================================
-# SIDEBAR OPTIONS
-# =========================================
 
-
-st.sidebar.header(
-    "⚙️ Response Settings"
+st.sidebar.title(
+    "⚙️ Settings"
 )
-
 
 
 technical_level = st.sidebar.selectbox(
@@ -93,8 +96,8 @@ technical_level = st.sidebar.selectbox(
 
 
 
-response_size = st.sidebar.selectbox(
-    "Response Size",
+response_length = st.sidebar.selectbox(
+    "Response Length",
     [
         "Short",
         "Medium",
@@ -105,7 +108,7 @@ response_size = st.sidebar.selectbox(
 
 
 language = st.sidebar.selectbox(
-    "Answer Language",
+    "Language",
     [
         "English",
         "Urdu",
@@ -116,16 +119,15 @@ language = st.sidebar.selectbox(
 
 
 show_sources = st.sidebar.checkbox(
-    "Show Retrieved Legal Sections",
-    True
+    "Show Legal Context",
+    value=True
 )
 
 
 
-
-# =========================================
-# PDF LOCATION
-# =========================================
+# =====================================
+# PDF PATH
+# =====================================
 
 
 BASE_DIR = os.path.dirname(
@@ -133,25 +135,26 @@ BASE_DIR = os.path.dirname(
 )
 
 
-PDF_FILE = os.path.join(
+
+PDF_PATH = os.path.join(
     BASE_DIR,
     "1470910659_707.pdf"
 )
 
 
 
-if not os.path.exists(PDF_FILE):
+if not os.path.exists(PDF_PATH):
 
     st.error(
         f"""
-        ❌ PECA PDF file not found.
+        ❌ PDF not found.
 
-        Looking here:
+        Searching:
 
-        {PDF_FILE}
+        {PDF_PATH}
 
-        Upload 1470910659_707.pdf
-        in your GitHub repository.
+        Make sure the PDF is uploaded
+        in GitHub beside app.py
         """
     )
 
@@ -160,26 +163,26 @@ if not os.path.exists(PDF_FILE):
 
 
 
-# =========================================
-# READ PDF
-# =========================================
+# =====================================
+# LOAD PDF
+# =====================================
 
 
 @st.cache_resource
-def load_pdf():
+def extract_pdf_text():
 
-
-    document = fitz.open(
-        PDF_FILE
+    doc = fitz.open(
+        PDF_PATH
     )
 
 
     text = ""
 
 
-    for page in document:
+    for page in doc:
 
         text += page.get_text()
+
 
 
     return text
@@ -187,24 +190,23 @@ def load_pdf():
 
 
 
-
-# =========================================
-# CREATE FAISS DATABASE
-# =========================================
+# =====================================
+# CREATE FAISS VECTOR STORE
+# =====================================
 
 
 @st.cache_resource
-def create_database():
+def create_vector_database():
 
 
-    text = load_pdf()
+    text = extract_pdf_text()
 
 
 
     chunks = []
 
+    chunk_size = 1200
 
-    chunk_size = 1000
 
 
     for i in range(
@@ -219,13 +221,13 @@ def create_database():
 
 
 
-    model = SentenceTransformer(
+    embedding_model = SentenceTransformer(
         "sentence-transformers/all-MiniLM-L6-v2"
     )
 
 
 
-    embeddings = model.encode(
+    embeddings = embedding_model.encode(
         chunks,
         convert_to_numpy=True
     )
@@ -240,27 +242,33 @@ def create_database():
     )
 
 
+
     index.add(
         embeddings
     )
 
 
-    return index, chunks, model
+
+    return (
+        index,
+        chunks,
+        embedding_model
+    )
 
 
 
 
-index, chunks, embedding_model = create_database()
+index, chunks, embedding_model = create_vector_database()
 
 
 
 
-# =========================================
+# =====================================
 # RETRIEVAL
-# =========================================
+# =====================================
 
 
-def search_documents(question):
+def retrieve_context(question):
 
 
     query_embedding = embedding_model.encode(
@@ -292,35 +300,38 @@ def search_documents(question):
 
 
 
-# =========================================
+# =====================================
 # GROQ ANSWER
-# =========================================
+# =====================================
 
 
-def generate_answer(question, context):
+def generate_answer(
+        question,
+        context
+):
 
 
     prompt=f"""
 
 You are CyberlawGPT.
 
-You answer questions according to Pakistan Cyber Law (PECA).
+You answer questions about Pakistan Cyber Laws.
 
-Use ONLY the provided legal context.
+Use only the provided PECA document context.
 
-Do not invent sections or punishments.
+Do not create fake legal sections.
 
-If information is not available say:
+If information is unavailable say:
 
 "Information not found in provided PECA document."
 
 
-QUESTION:
+Question:
 
 {question}
 
 
-LEGAL CONTEXT:
+Legal Context:
 
 {context}
 
@@ -333,7 +344,7 @@ Technical Level:
 
 
 Response Length:
-{response_size}
+{response_length}
 
 
 Language:
@@ -341,12 +352,13 @@ Language:
 
 
 
-Answer format:
+Answer Format:
 
-1. Relevant PECA Section
+1. Relevant Section
 2. Explanation
 3. Punishment (if mentioned)
 4. Practical guidance
+
 
 """
 
@@ -370,24 +382,25 @@ Answer format:
     )
 
 
+
     return response.choices[0].message.content
 
 
 
 
 
-# =========================================
+# =====================================
 # SAMPLE QUESTIONS
-# =========================================
+# =====================================
 
 
 st.subheader(
-    "💡 Sample Questions"
+    "💡 Ask Examples"
 )
 
 
 
-questions=[
+samples=[
 
 "Unauthorized access punishment under PECA?",
 
@@ -395,7 +408,7 @@ questions=[
 
 "What is electronic fraud?",
 
-"What happens if someone shares private pictures?",
+"What happens if someone shares private images?",
 
 "What powers does investigation agency have?"
 
@@ -403,27 +416,27 @@ questions=[
 
 
 
-columns = st.columns(2)
+cols = st.columns(2)
 
 
 
-for i,q in enumerate(questions):
+for i,q in enumerate(samples):
 
-    if columns[i%2].button(q):
+    if cols[i % 2].button(q):
 
         st.session_state.question=q
 
 
 
 
-# =========================================
-# USER QUERY
-# =========================================
+# =====================================
+# USER QUESTION
+# =====================================
 
 
 question = st.text_input(
 
-    "Ask your Cyber Law Question",
+    "Enter your cyber law question",
 
     value=st.session_state.get(
         "question",
@@ -434,27 +447,21 @@ question = st.text_input(
 
 
 
+
 if st.button(
     "⚖️ Generate Answer"
 ):
 
 
-    if question.strip()=="":
-
-        st.warning(
-            "Please enter a question."
-        )
-
-
-    else:
+    if question.strip():
 
 
         with st.spinner(
-            "Analyzing PECA..."
+            "Searching PECA document..."
         ):
 
 
-            context = search_documents(
+            context = retrieve_context(
                 question
             )
 
@@ -482,3 +489,11 @@ if st.button(
             ):
 
                 st.write(context)
+
+
+
+    else:
+
+        st.warning(
+            "Please enter a question."
+        )
