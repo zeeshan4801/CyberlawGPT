@@ -8,9 +8,9 @@ from sentence_transformers import SentenceTransformer
 from groq import Groq
 
 
-# ======================================
-# APP CONFIGURATION
-# ======================================
+# ==========================================
+# PAGE CONFIG
+# ==========================================
 
 st.set_page_config(
     page_title="CyberlawGPT",
@@ -21,55 +21,47 @@ st.set_page_config(
 
 st.title("⚖️ CyberlawGPT")
 
-st.markdown(
-    """
-    ### AI Legal Assistant based on Pakistan Cyber Laws (PECA)
-    
-    Ask questions related to Pakistan's cyber laws.
-    Answers are generated using Retrieval Augmented Generation (RAG).
-    """
+st.write(
+    "AI Legal Assistant based on Pakistan Cyber Laws (PECA)"
 )
 
 
+# ==========================================
+# SECURE GROQ API KEY
+# ==========================================
 
-# ======================================
-# LOAD GROQ API KEY SECURELY
-# ======================================
+def get_api_key():
 
-
-def get_groq_key():
-
-    # Streamlit Cloud Secret
-    if "GROQ_API_KEY" in st.secrets:
+    # Streamlit Cloud
+    try:
         return st.secrets["GROQ_API_KEY"]
 
-
-    # Optional Colab/local testing
-    if "GROQ_API_KEY" in os.environ:
-        return os.environ["GROQ_API_KEY"]
+    except Exception:
+        pass
 
 
-    return None
+    # Local / Colab
+    return os.getenv(
+        "GROQ_API_KEY"
+    )
 
 
 
-groq_key = get_groq_key()
+GROQ_API_KEY = get_api_key()
 
 
-if not groq_key:
+if not GROQ_API_KEY:
 
     st.error(
         """
-        ❌ Groq API Key not found.
+        Groq API Key Missing.
 
-        For Streamlit Cloud:
-        Add it in:
+        Streamlit Cloud:
+        Settings → Secrets
 
-        App Settings → Secrets
+        Add:
 
-        Example:
-
-        GROQ_API_KEY="your_api_key_here"
+        GROQ_API_KEY="your_key_here"
         """
     )
 
@@ -78,14 +70,14 @@ if not groq_key:
 
 
 client = Groq(
-    api_key=groq_key
+    api_key=GROQ_API_KEY
 )
 
 
 
-# ======================================
+# ==========================================
 # SIDEBAR SETTINGS
-# ======================================
+# ==========================================
 
 
 st.sidebar.header(
@@ -93,123 +85,129 @@ st.sidebar.header(
 )
 
 
+
 technical_level = st.sidebar.selectbox(
-
     "Technical Level",
-
     [
         "Beginner",
         "Intermediate",
         "Expert / Legal Professional"
     ]
-
 )
 
 
 
-response_length = st.sidebar.selectbox(
-
+response_size = st.sidebar.selectbox(
     "Response Size",
-
     [
         "Short",
         "Medium",
         "Detailed"
     ]
-
 )
 
 
 
 language = st.sidebar.selectbox(
-
     "Answer Language",
-
     [
         "English",
         "Urdu",
         "Roman Urdu"
     ]
-
 )
 
 
 
 show_sources = st.sidebar.checkbox(
-
     "Show Retrieved Legal Sections",
-
-    value=True
-
+    True
 )
 
 
 
 
-# ======================================
-# PDF LOCATION
-# ======================================
+# ==========================================
+# PDF LOCATION FIX
+# ==========================================
 
 
-PDF_FILE = "1470910659_707.pdf"
+BASE_DIR = os.path.dirname(
+    os.path.abspath(__file__)
+)
+
+
+PDF_FILE = os.path.join(
+    BASE_DIR,
+    "1470910659_707.pdf"
+)
 
 
 
 
-# ======================================
-# READ PDF
-# ======================================
+# ==========================================
+# LOAD PDF
+# ==========================================
 
 
 @st.cache_resource
-
-def load_pdf():
+def load_pdf_text():
 
 
     if not os.path.exists(PDF_FILE):
 
         st.error(
-            "PECA PDF file not found."
+            f"""
+            ❌ PECA PDF file not found.
+
+            Expected location:
+
+            {PDF_FILE}
+
+            Upload:
+
+            1470910659_707.pdf
+
+            in the same folder as app.py
+            """
         )
 
         st.stop()
 
 
 
-    document = fitz.open(
+    doc = fitz.open(
         PDF_FILE
     )
 
 
-    complete_text = ""
+    text = ""
 
 
-    for page in document:
+    for page in doc:
 
-        complete_text += page.get_text()
-
-
-
-    return complete_text
+        text += page.get_text()
 
 
 
+    return text
 
 
-# ======================================
+
+
+# ==========================================
 # CREATE VECTOR DATABASE
-# ======================================
+# ==========================================
 
 
 @st.cache_resource
-
-def create_faiss_index():
-
-
-    text = load_pdf()
+def build_vector_store():
 
 
-    chunks = []
+    text = load_pdf_text()
+
+
+    chunks=[]
 
 
     chunk_size = 1000
@@ -235,11 +233,9 @@ def create_faiss_index():
 
 
 
-    embeddings = embedding_model.encode(
+    vectors = embedding_model.encode(
 
         chunks,
-
-        show_progress_bar=False,
 
         convert_to_numpy=True
 
@@ -247,24 +243,18 @@ def create_faiss_index():
 
 
 
-    dimension = embeddings.shape[1]
+    dimension = vectors.shape[1]
 
 
 
     index = faiss.IndexFlatL2(
-
         dimension
-
     )
-
 
 
     index.add(
-
-        embeddings
-
+        vectors
     )
-
 
 
     return index, chunks, embedding_model
@@ -273,80 +263,76 @@ def create_faiss_index():
 
 
 
-index, chunks, embedding_model = create_faiss_index()
+index, chunks, embedding_model = build_vector_store()
 
 
 
-
-# ======================================
-# RETRIEVAL FUNCTION
-# ======================================
-
-
-def retrieve_documents(question):
+# ==========================================
+# SEARCH DOCUMENT
+# ==========================================
 
 
-    question_embedding = embedding_model.encode(
+def retrieve_context(question):
+
+
+    query_vector = embedding_model.encode(
 
         [question]
 
     )
 
 
-    distances, results = index.search(
+    distances, ids = index.search(
 
-        np.array(question_embedding),
+        np.array(query_vector),
 
         5
 
     )
 
 
-    retrieved=[]
+    context=[]
 
 
+    for idx in ids[0]:
 
-    for item in results[0]:
-
-        retrieved.append(
-
-            chunks[item]
-
+        context.append(
+            chunks[idx]
         )
 
 
 
-    return "\n\n".join(retrieved)
+    return "\n\n".join(context)
 
 
 
 
-# ======================================
-# GROQ RESPONSE
-# ======================================
+# ==========================================
+# GROQ GENERATION
+# ==========================================
 
 
-def ask_cyberlawgpt(question, context):
+def generate_response(
+        question,
+        context
+):
 
 
-    prompt = f"""
+    prompt=f"""
 
 You are CyberlawGPT.
 
-You are a Pakistan Cyber Law assistant.
+You answer questions only according to Pakistan cyber law document provided.
 
-Use ONLY the provided legal context.
+Do not invent laws.
 
-Do not create fake sections,
-fake punishments, or unsupported legal claims.
-
-If information is unavailable say:
+If information is not available,
+say:
 
 "Information not found in provided PECA document."
 
 
-
-User Question:
+Question:
 
 {question}
 
@@ -365,7 +351,7 @@ Technical Level:
 
 
 Response Length:
-{response_length}
+{response_size}
 
 
 Language:
@@ -373,47 +359,44 @@ Language:
 
 
 
-Always explain:
+Include:
 
-1. Relevant PECA section
-2. Legal explanation
-3. Punishment (if available)
-4. Practical guidance
-
+- Relevant PECA Section
+- Explanation
+- Punishment (if mentioned)
+- Practical guidance
 
 """
 
 
-
-    completion = client.chat.completions.create(
+    response = client.chat.completions.create(
 
         model="llama-3.3-70b-versatile",
-
 
         messages=[
 
             {
-                "role":"system",
+                "role":"user",
                 "content":prompt
             }
 
         ],
-
 
         temperature=0.1
 
     )
 
 
-    return completion.choices[0].message.content
+
+    return response.choices[0].message.content
 
 
 
 
 
-# ======================================
+# ==========================================
 # SAMPLE QUESTIONS
-# ======================================
+# ==========================================
 
 
 st.subheader(
@@ -421,34 +404,28 @@ st.subheader(
 )
 
 
-examples=[
 
+samples=[
 
 "Unauthorized access punishment under PECA?",
 
-
 "What is cyber stalking?",
-
 
 "What is electronic fraud?",
 
+"What happens if someone shares private photos?",
 
-"What happens if someone shares private pictures?",
-
-
-"What powers does investigation agency have?"
-
-
+"What are investigation powers under PECA?"
 
 ]
 
 
-cols = st.columns(2)
+
+cols=st.columns(2)
 
 
 
-for i,q in enumerate(examples):
-
+for i,q in enumerate(samples):
 
     if cols[i%2].button(q):
 
@@ -457,10 +434,10 @@ for i,q in enumerate(examples):
 
 
 
-# ======================================
-# USER QUERY
-# ======================================
 
+# ==========================================
+# USER INPUT
+# ==========================================
 
 
 question = st.text_input(
@@ -476,41 +453,27 @@ question = st.text_input(
 
 
 
-
 if st.button(
     "⚖️ Generate Answer"
 ):
 
 
-    if question.strip()=="":
-
-
-        st.warning(
-            "Please enter a question."
-        )
-
-
-    else:
+    if question:
 
 
         with st.spinner(
-            "Analyzing PECA law..."
+            "Searching PECA law..."
         ):
 
 
-            context = retrieve_documents(
-
+            context = retrieve_context(
                 question
-
             )
 
 
-            answer = ask_cyberlawgpt(
-
+            answer = generate_response(
                 question,
-
                 context
-
             )
 
 
@@ -528,7 +491,16 @@ if st.button(
 
 
             with st.expander(
-                "📚 Retrieved Legal Sections"
+                "📚 Retrieved Legal Text"
             ):
 
                 st.write(context)
+
+
+
+    else:
+
+
+        st.warning(
+            "Please enter a question."
+        )
